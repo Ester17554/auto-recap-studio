@@ -1,0 +1,11 @@
+{
+  "name": "Auto Recap Studio",
+  "short_name": "Auto Recap",
+  "description": "Mapa de cenas para resumos de filmes",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "lang": "pt-BR",
+  "icons": []
+}

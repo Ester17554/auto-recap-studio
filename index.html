@@ -5,12 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0b0d12">
 <link rel="stylesheet" href="styles.css">
-<title>Auto Recap Studio V3</title>
+<title>Auto Recap Studio V4</title>
 </head>
 <body>
 <div id="app">
 <header class="topbar">
-  <div class="brand"><div class="logo">🎬</div><div><strong>Auto Recap</strong><span>Studio V3</span></div></div>
+  <div class="brand"><div class="logo">🎬</div><div><strong>Auto Recap</strong><span>Studio V4</span></div></div>
   <button id="newProject" class="iconBtn" title="Novo projeto">＋</button>
 </header>
 <main>
@@ -18,7 +18,7 @@
   <div class="hero">
     <div class="eyebrow">MAPA DE CENAS · MOBILE</div>
     <h1>Filme + roteiro + narração, sem sobrecarregar o iPhone.</h1>
-    <p>Esta versão prioriza estabilidade. Ela cria um mapa leve de cenas, com frames e timestamps, pronto para revisão e CapCut.</p>
+    <p>Esta versão prioriza estabilidade no iPhone: seleciona o filme primeiro, confirma o arquivo e só depois analisa os frames. O roteiro não tem limite de caracteres.</p>
     <button id="startBtn" class="primary big">Criar novo projeto</button>
   </div>
   <div class="sectionTitle"><div><span class="eyebrow">SEUS PROJETOS</span><h2>Projetos recentes</h2></div></div>
@@ -28,10 +28,11 @@
   <div class="screenHead"><button class="backBtn" data-back="home">←</button><div><span class="eyebrow">PROJETO</span><h2 id="projectTitle">Novo projeto</h2></div><button id="saveProject" class="smallBtn">Salvar</button></div>
   <div class="card">
     <label>Nome do projeto<input id="projectName" placeholder="Ex.: Obsessão"></label>
-    <label>🎬 Filme completo<input id="movieFile" type="file"></label>
+    <label>🎬 Filme completo<input id="movieFile" type="file" accept="video/*,.mp4,.mov,.m4v,.webm,.mkv,.avi"></label>
     <div id="movieInfo" class="fileInfo">Nenhum filme selecionado.</div>
-    <label>📝 Roteiro<textarea id="scriptInput" rows="12" placeholder="Cole aqui o roteiro completo..."></textarea></label>
-    <label>🎙️ Narração<input id="audioFile" type="file"></label>
+    <div id="movieDiag" class="diag hidden"></div>
+    <label>📝 Roteiro <span class="labelHint">sem limite de caracteres</span><textarea id="scriptInput" rows="16" spellcheck="false" placeholder="Cole aqui o roteiro completo, mesmo que tenha 10, 15 ou 20 minutos de narração..."></textarea><div id="scriptInfo" class="fileInfo">0 caracteres · 0 palavras</div></label>
+    <label>🎙️ Narração<input id="audioFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm"></label>
     <div id="audioInfo" class="fileInfo">Você pode escolher o arquivo diretamente pelo app Arquivos. MP3, WAV, M4A e outros formatos podem ser usados; se o Safari não conseguir ler a duração, o mapa continua funcionando.</div>
   </div>
   <div class="card">
@@ -39,10 +40,10 @@
     <div class="grid2">
       <label>Amostragem<select id="sampleStep"><option value="8">8 s — equilibrado</option><option value="12" selected>12 s — recomendado</option><option value="15">15 s — iPhone lento</option><option value="20">20 s — muito leve</option></select></label>
       <label>Candidatos<select id="candidateCount"><option value="2" selected>2</option><option value="3">3</option></select></label>
-      <label>Máx. trechos<select id="maxChunks"><option value="30">30 — rápido</option><option value="45" selected>45 — recomendado</option><option value="60">60 — detalhado</option></select></label>
+      <label>Trechos do roteiro<select id="maxChunks"><option value="0" selected>Automático — sem limite</option><option value="45">Até 45</option><option value="60">Até 60</option></select></label>
       <label>Sensibilidade<select id="cutSensitivity"><option value="0.10">Baixa</option><option value="0.075" selected>Média</option><option value="0.055">Alta</option></select></label>
     </div>
-    <div class="note">💡 O V3 não baixa o modelo CLIP nem tenta analisar centenas de imagens com IA no iPhone. Isso deixa a geração do mapa muito mais leve.</div>
+    <div class="note">💡 O V4 não baixa o modelo CLIP nem tenta analisar centenas de imagens com IA no iPhone. Isso deixa a geração do mapa muito mais leve.</div>
   </div>
   <button id="analyzeBtn" class="primary">🔎 Criar mapa leve</button>
   <div id="analysisBox" class="analysisBox hidden"><div class="spinner"></div><div><strong id="analysisTitle">Preparando...</strong><p id="analysisStatus">Aguarde.</p><div class="progress"><i id="progressBar"></i></div></div></div>
@@ -58,12 +59,12 @@
 <section id="export" class="screen">
   <div class="screenHead"><button class="backBtn" data-back="map">←</button><div><span class="eyebrow">EXPORTAÇÃO</span><h2>Arquivos</h2></div></div>
   <div class="card exportCard"><div class="exportIcon">🗺️</div><h2>Mapa de edição</h2><p>Inclui roteiro, timestamps, frames, candidatos e aprovações.</p><button id="downloadJson" class="primary">Baixar JSON</button><button id="downloadCsv" class="secondary">Baixar CSV</button><button id="downloadPlan" class="secondary">Baixar plano CapCut TXT</button></div>
-  <div class="card"><h3>Observação</h3><p>O V3 cria o mapa e não corta fisicamente o filme. Isso evita processamento pesado e deixa a montagem final no CapCut.</p></div>
+  <div class="card"><h3>Observação</h3><p>O V4 cria o mapa e não corta fisicamente o filme. Isso evita processamento pesado e deixa a montagem final no CapCut.</p></div>
 </section>
 </main>
 <nav class="bottomNav"><button data-nav="home" class="nav active">⌂<span>Projetos</span></button><button data-nav="project" class="nav">＋<span>Novo</span></button><button data-nav="map" class="nav">▦<span>Mapa</span></button></nav>
 <div id="toast"></div>
 </div>
-<script type="module" src="app.js?v=3"></script>
+<script type="module" src="app.js?v=4"></script>
 </body>
 </html>

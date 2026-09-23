@@ -1,11 +1,11 @@
 {
-  "name": "Auto Recap Studio",
-  "short_name": "Auto Recap",
-  "description": "Mapa de cenas para resumos de filmes",
-  "start_url": "./index.html",
-  "display": "standalone",
-  "background_color": "#0b0d12",
-  "theme_color": "#0b0d12",
-  "lang": "pt-BR",
-  "icons": []
+  "name":"Auto Recap Studio V3",
+  "short_name":"Auto Recap V3",
+  "description":"Mapa leve de cenas para resumos de filmes",
+  "start_url":"./index.html?v=3",
+  "display":"standalone",
+  "background_color":"#090b10",
+  "theme_color":"#090b10",
+  "lang":"pt-BR",
+  "icons":[]
 }

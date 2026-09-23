@@ -1,48 +1,19 @@
-# AUTO RECAP STUDIO V1
+# AUTO RECAP STUDIO V3
 
-Aplicativo web/PWA experimental para o fluxo de criação de resumos de filmes.
+Versão mobile-first e leve para criar um mapa de cenas a partir de filme + roteiro + narração.
 
-## Fluxo
+## O que mudou
+- Sem Transformers/CLIP: evita baixar um modelo grande no iPhone.
+- Sem cache persistente do app: reduz problemas de versão antiga no Safari.
+- Input de filme e narração sem `accept`, permitindo escolher arquivos pelo app Arquivos.
+- Extração de frames em resolução reduzida.
+- Amostragem configurável de 8/12/15/20 s.
+- Detecção leve de mudanças visuais.
+- Mapeamento temporal do roteiro para o filme, usando a duração da narração quando disponível.
+- Exportação JSON, CSV e plano TXT para CapCut.
 
-1. Criar projeto
-2. Adicionar filme
-3. Colar roteiro
-4. Adicionar narração
-5. Analisar filme
-6. Detectar cortes/segmentos
-7. Relacionar trechos do roteiro com frames do filme
-8. Revisar candidatos
-9. Aprovar cenas
-10. Exportar mapa CSV/JSON
-11. Gerar um plano para levar ao CapCut
+## Limitação importante
+O V3 é um **mapa leve**, não uma IA semântica que entende o conteúdo de cada cena. Ele sugere timestamps por posição temporal + mudanças visuais. O usuário deve confirmar a cena no filme antes de editar.
 
-## Uso no celular
-
-Abra `index.html` em um navegador que aceite módulos JavaScript e armazenamento local.
-
-Para um uso mais confortável:
-- publique os arquivos em um host estático;
-- adicione à tela inicial;
-- use um trecho de 5–10 minutos para o primeiro teste;
-- intervalo de 5 segundos é recomendado para celulares mais lentos.
-
-## Privacidade
-
-O aplicativo não possui backend próprio nesta versão. O filme é processado localmente no navegador. O modelo visual é baixado do CDN/Hugging Face na primeira análise.
-
-## Limitações
-
-- A correspondência roteiro → cena é uma sugestão baseada em visão/texto, não uma garantia de que a cena é a correta.
-- A detecção de cortes é aproximada.
-- O navegador pode ficar pesado com filmes longos.
-- A narração é usada para duração/organização; esta V1 não faz transcrição avançada da narração.
-- O exportador gera mapa/plano, não um MP4 final.
-- A etapa de corte físico dos clipes fica para a próxima versão.
-
-## Estrutura
-
-- index.html — interface
-- styles.css — interface responsiva
-- app.js — lógica
-- manifest.json — PWA
-- sw.js — cache básico do aplicativo
+## Publicação no GitHub Pages
+Substitua os arquivos `index.html`, `app.js`, `styles.css`, `manifest.json`, `sw.js` e `README.md` do repositório pelos arquivos desta pasta e faça commit direto na branch principal.

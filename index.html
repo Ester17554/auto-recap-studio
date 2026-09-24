@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0b0d12">
 <link rel="stylesheet" href="styles.css">
-<title>Auto Recap Studio V4</title>
+<title>Auto Recap Studio V5</title>
 </head>
 <body>
 <div id="app">
@@ -18,7 +18,7 @@
   <div class="hero">
     <div class="eyebrow">MAPA DE CENAS · MOBILE</div>
     <h1>Filme + roteiro + narração, sem sobrecarregar o iPhone.</h1>
-    <p>Esta versão prioriza estabilidade no iPhone: seleciona o filme primeiro, confirma o arquivo e só depois analisa os frames. O roteiro não tem limite de caracteres.</p>
+    <p>Esta versão mantém o fluxo leve no iPhone, aceita roteiro sem limite artificial de caracteres e permite várias partes de narração em uma única linha do tempo.</p>
     <button id="startBtn" class="primary big">Criar novo projeto</button>
   </div>
   <div class="sectionTitle"><div><span class="eyebrow">SEUS PROJETOS</span><h2>Projetos recentes</h2></div></div>
@@ -32,8 +32,9 @@
     <div id="movieInfo" class="fileInfo">Nenhum filme selecionado.</div>
     <div id="movieDiag" class="diag hidden"></div>
     <label>📝 Roteiro <span class="labelHint">sem limite de caracteres</span><textarea id="scriptInput" rows="16" spellcheck="false" placeholder="Cole aqui o roteiro completo, mesmo que tenha 10, 15 ou 20 minutos de narração..."></textarea><div id="scriptInfo" class="fileInfo">0 caracteres · 0 palavras</div></label>
-    <label>🎙️ Narração<input id="audioFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm"></label>
-    <div id="audioInfo" class="fileInfo">Você pode escolher o arquivo diretamente pelo app Arquivos. MP3, WAV, M4A e outros formatos podem ser usados; se o Safari não conseguir ler a duração, o mapa continua funcionando.</div>
+    <label>🎙️ Narração <span class="labelHint">vários arquivos</span><input id="audioFile" type="file" multiple accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm"></label>
+    <div id="audioInfo" class="fileInfo">Selecione uma ou várias partes da narração. A ordem escolhida será usada como uma única linha do tempo.</div>
+    <div id="audioList" class="audioList"></div>
   </div>
   <div class="card">
     <div class="sectionTitle compact"><div><span class="eyebrow">CONFIGURAÇÃO</span><h3>Mapa rápido</h3></div></div>
@@ -50,7 +51,7 @@
 </section>
 <section id="map" class="screen">
   <div class="screenHead stickyHead"><button class="backBtn" data-back="project">←</button><div><span class="eyebrow">MAPA DE CENAS</span><h2 id="mapTitle">Projeto</h2></div><button id="exportTop" class="smallBtn">Exportar</button></div>
-  <div class="notice">🧭 <b>Como usar:</b> o V3 detecta mudanças visuais e distribui os trechos do roteiro pela duração da narração. Use os timestamps como guia e confirme a cena no filme antes de editar.</div>
+  <div class="notice">🧭 <b>Como usar:</b> o V5 detecta mudanças visuais e distribui os trechos do roteiro pela linha do tempo virtual da narração. Cada parte de áudio mantém seu nome e intervalo. Use os timestamps como guia e confirme a cena no filme antes de editar.</div>
   <div class="stats"><div><b id="statChunks">0</b><span>trechos</span></div><div><b id="statScenes">0</b><span>candidatos</span></div><div><b id="statApproved">0</b><span>aprovadas</span></div></div>
   <div class="mapActions"><button id="approveAll" class="smallBtn">✓ Aprovar melhores</button><button id="clearApproved" class="smallBtn">Limpar</button></div>
   <div id="mapList"></div>
@@ -59,12 +60,12 @@
 <section id="export" class="screen">
   <div class="screenHead"><button class="backBtn" data-back="map">←</button><div><span class="eyebrow">EXPORTAÇÃO</span><h2>Arquivos</h2></div></div>
   <div class="card exportCard"><div class="exportIcon">🗺️</div><h2>Mapa de edição</h2><p>Inclui roteiro, timestamps, frames, candidatos e aprovações.</p><button id="downloadJson" class="primary">Baixar JSON</button><button id="downloadCsv" class="secondary">Baixar CSV</button><button id="downloadPlan" class="secondary">Baixar plano CapCut TXT</button></div>
-  <div class="card"><h3>Observação</h3><p>O V4 cria o mapa e não corta fisicamente o filme. Isso evita processamento pesado e deixa a montagem final no CapCut.</p></div>
+  <div class="card"><h3>Observação</h3><p>O V5 cria o mapa e não corta fisicamente o filme. Vários áudios são tratados como uma única narração contínua, sem precisar juntá-los. Isso evita processamento pesado e deixa a montagem final no CapCut.</p></div>
 </section>
 </main>
 <nav class="bottomNav"><button data-nav="home" class="nav active">⌂<span>Projetos</span></button><button data-nav="project" class="nav">＋<span>Novo</span></button><button data-nav="map" class="nav">▦<span>Mapa</span></button></nav>
 <div id="toast"></div>
 </div>
-<script type="module" src="app.js?v=4"></script>
+<script type="module" src="app.js?v=5"></script>
 </body>
 </html>

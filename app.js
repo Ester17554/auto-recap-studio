@@ -1,5 +1,5 @@
 const $=id=>document.getElementById(id);
-const KEY='AUTO_RECAP_STUDIO_PROJECTS_V8';
+const KEY='AUTO_RECAP_STUDIO_PROJECTS_V9';
 let state={projects:[],current:null};
 let runtime={movie:null,audioFiles:[],libraryFiles:[],thumbCache:new Map()};
 
@@ -15,7 +15,7 @@ function setProgress(v){$('progressBar').style.width=`${Math.max(0,Math.min(100,
 function nextFrame(){return new Promise(r=>requestAnimationFrame(()=>r()))}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 
-function newProject(){state.current={id:crypto.randomUUID(),name:'',created:Date.now(),duration:0,script:'',audioDuration:null,audioParts:[],rows:[],segments:[],status:'Novo',engine:'V8-local-stream'};runtime.movie=null;runtime.audioFiles=[];runtime.libraryFiles=[];runtime.thumbCache.clear();resetForm();go('project')}
+function newProject(){state.current={id:crypto.randomUUID(),name:'',created:Date.now(),duration:0,script:'',audioDuration:null,audioParts:[],rows:[],segments:[],status:'Novo',engine:'V9-local-sequential'};runtime.movie=null;runtime.audioFiles=[];runtime.libraryFiles=[];runtime.thumbCache.clear();resetForm();go('project')}
 function resetForm(){$('projectName').value='';$('projectTitle').textContent='Novo projeto';$('scriptInput').value='';$('movieFile').value='';$('moviePhotoFile').value='';$('audioFile').value='';$('mediaLibrary').value='';$('movieInfo').textContent='Nenhum filme selecionado.';$('movieDiag').classList.add('hidden');$('audioInfo').textContent='Nenhuma narração selecionada.';$('audioList').innerHTML='';$('libraryList').innerHTML='';$('libraryInfo').textContent='Opcional. O filme principal continua sendo a fonte.';$('moviePreview').classList.add('hidden');$('moviePreviewVideo').removeAttribute('src');$('analysisBox').classList.add('hidden');setProgress(0);updateScriptInfo()}
 function openProject(p){state.current=JSON.parse(JSON.stringify(p));runtime.movie=null;runtime.audioFiles=[];runtime.libraryFiles=[];runtime.thumbCache.clear();$('projectName').value=p.name||'Projeto';$('projectTitle').textContent=p.name||'Projeto';$('scriptInput').value=p.script||'';$('movieFile').value='';$('moviePhotoFile').value='';$('audioFile').value='';$('mediaLibrary').value='';$('movieInfo').textContent=p.duration?`Mapa salvo · filme ${tc(p.duration)}`:'Selecione o filme novamente para analisar.';$('audioInfo').textContent=p.audioDuration?`Narração virtual · ${tc(p.audioDuration)} · ${p.audioParts?.length||0} arquivo(s)`:'Nenhuma narração salva.';$('audioList').innerHTML='';updateScriptInfo();if(p.rows?.length){renderMap();go('map')}else go('project')}
 function saveCurrent(){if(!state.current)return;state.current.name=($('projectName').value||'Projeto sem nome').trim();state.current.script=$('scriptInput').value;state.current.status=state.current.rows?.length?'Mapa pronto':'Em preparação';persistCurrent();renderProjects();$('projectTitle').textContent=state.current.name;toast('Projeto salvo')}
@@ -43,22 +43,85 @@ async function tinyFrame(v,t,mode='sig'){await seekFrame(v,t);await new Promise(
 async function makeThumb(v,t){await seekFrame(v,t);await new Promise(r=>{if('requestVideoFrameCallback'in v)v.requestVideoFrameCallback(()=>r());else requestAnimationFrame(r)});const c=document.createElement('canvas');c.width=240;c.height=135;c.getContext('2d').drawImage(v,0,0,240,135);return c.toDataURL('image/jpeg',.56)}
 function estimateETA(done,total,start){if(!done)return'';const sec=(performance.now()-start)/1000;const left=Math.max(0,total-done);return `Estimativa: ${Math.max(1,Math.round(sec/done*left))}s restantes`}
 
-async function analyze(){if(!state.current)return;const movie=runtime.movie;if(!movie){toast('Escolha o filme primeiro.');return}const script=$('scriptInput').value.trim();if(!script){toast('Cole o roteiro antes de criar o mapa.');return}const step=Number($('sampleStep').value||15),topk=Number($('candidateCount').value||2),sens=Number($('cutSensitivity').value||.10),maxN=Number($('maxChunks').value||0);$('analyzeBtn').disabled=true;setProgress(0);setAnalysis('Abrindo filme','Preparando o decodificador local...');let url='';let v=null;const started=performance.now();try{url=URL.createObjectURL(movie);v=document.createElement('video');v.preload='auto';v.muted=true;v.playsInline=true;v.src=url;await new Promise((res,rej)=>{v.onloadedmetadata=()=>res();v.onerror=()=>rej(new Error('O Safari não conseguiu decodificar este arquivo. Tente MP4/H.264.'))});const dur=Number(v.duration);if(!isFinite(dur)||dur<=0)throw new Error('Duração inválida.');state.current.duration=dur;
-const total=Math.max(1,Math.ceil(dur/step));const samples=[];let prev=null;for(let i=0;i<total;i++){const t=Math.min(i*step,Math.max(.01,dur-.1));setAnalysis('Varredura leve',`Amostra ${i+1} de ${total} · ${tc(t)}`,estimateETA(i,total,started));try{const sig=await tinyFrame(v,t,'sig');const d=prev?diffSig(prev,sig):1;samples.push({t,sig,d});prev=sig}catch(e){console.warn('sample',i,e)}setProgress(5+(i+1)/total*60);await nextFrame()}
-if(samples.length<2)throw new Error('Poucas amostras foram lidas. O iPhone não conseguiu percorrer o vídeo.');
+async function streamSamples(v,dur,step,sens,started){
+  const total=Math.max(1,Math.ceil(dur/step));
+  const samples=[]; let prev=null; let nextTarget=0; let sampleIndex=0;
+  let lastMedia=0,lastWall=performance.now(),rate=16;
+  const onFrame=async (_now,meta)=>{
+    if(v.paused||v.ended)return;
+    const t=Number(meta?.mediaTime ?? v.currentTime ?? 0);
+    const now=performance.now();
+    if(now-lastWall>=800){
+      const mediaDelta=t-lastMedia;
+      if(mediaDelta<0.5) rate=4;
+      else if(mediaDelta<2) rate=8;
+      else rate=16;
+      lastMedia=t; lastWall=now;
+      try{v.playbackRate=rate}catch{}
+    }
+    if(t+0.05>=nextTarget && sampleIndex<total){
+      const sig=await tinyFrameSequential(v);
+      const d=prev?diffSig(prev,sig):1;
+      samples.push({t:Math.min(nextTarget,dur),sig,d}); prev=sig; sampleIndex++;
+      nextTarget=Math.min(dur-.05,sampleIndex*step);
+      setAnalysis('Varredura sequencial',`Amostra ${sampleIndex} de ${total} · ${tc(t)} · ${rate}×`,estimateETA(sampleIndex,total,started));
+      setProgress(5+(sampleIndex/total)*60);
+      await nextFrame();
+    }
+    if(sampleIndex>=total){v.pause();return}
+    if('requestVideoFrameCallback' in v)v.requestVideoFrameCallback(onFrame);
+  };
+  v.currentTime=0;
+  await new Promise((res,rej)=>{
+    const timer=setTimeout(()=>rej(new Error('O iPhone não iniciou a leitura sequencial do vídeo.')),12000);
+    const ready=()=>{clearTimeout(timer);res()};
+    if(v.readyState>=2)ready(); else v.addEventListener('canplay',ready,{once:true});
+  });
+  try{v.playbackRate=rate}catch{}
+  try{await v.play()}catch(e){throw new Error('O Safari bloqueou a reprodução local acelerada. Toque em Reproduzir no preview do filme e tente novamente.')}
+  if('requestVideoFrameCallback' in v){
+    await new Promise((res,rej)=>{
+      let check;
+      const tick=()=>{if(sampleIndex>=total||v.ended){res();return}check=setTimeout(tick,500);};
+      tick();
+      v.requestVideoFrameCallback(onFrame);
+      setTimeout(()=>{if(sampleIndex<2){clearTimeout(check);rej(new Error('Poucas amostras foram lidas. O iPhone não conseguiu percorrer o vídeo em modo sequencial.'))}},18000);
+    });
+  }else{
+    await new Promise((res,rej)=>{
+      let lastSample=-1;
+      const timer=setInterval(async()=>{
+        const t=v.currentTime;
+        const idx=Math.floor(t/step);
+        if(idx!==lastSample && idx<total){lastSample=idx;const sig=await tinyFrameSequential(v);const d=prev?diffSig(prev,sig):1;samples.push({t:Math.min(idx*step,dur),sig,d});prev=sig;sampleIndex++;setAnalysis('Varredura sequencial',`Amostra ${sampleIndex} de ${total} · ${tc(t)}`,estimateETA(sampleIndex,total,started));setProgress(5+(sampleIndex/total)*60)}
+        if(v.ended||sampleIndex>=total){clearInterval(timer);res()}
+      },120);
+      setTimeout(()=>{clearInterval(timer);if(samples.length<2)rej(new Error('Poucas amostras foram lidas. O iPhone não conseguiu percorrer o vídeo.'));else res()},Math.max(30000,dur*2500));
+    });
+  }
+  if(samples.length<2)throw new Error('Poucas amostras foram lidas. O iPhone não conseguiu percorrer o vídeo.');
+  return samples;
+}
+
+async function tinyFrameSequential(v){
+  const c=document.createElement('canvas');c.width=32;c.height=18;
+  c.getContext('2d',{willReadFrequently:true}).drawImage(v,0,0,32,18);
+  return signature(c);
+}
+
+async function analyze(){if(!state.current)return;const movie=runtime.movie;if(!movie){toast('Escolha o filme primeiro.');return}const script=$('scriptInput').value.trim();if(!script){toast('Cole o roteiro antes de criar o mapa.');return}const step=Number($('sampleStep').value||15),topk=Number($('candidateCount').value||2),sens=Number($('cutSensitivity').value||.10),maxN=Number($('maxChunks').value||0);$('analyzeBtn').disabled=true;setProgress(0);setAnalysis('Abrindo filme','Preparando a leitura sequencial local...');let url='';let v=null;const started=performance.now();try{url=URL.createObjectURL(movie);v=document.createElement('video');v.preload='auto';v.muted=true;v.playsInline=true;v.setAttribute('playsinline','');v.style.cssText='position:fixed;width:2px;height:2px;left:-10px;top:-10px;opacity:0;pointer-events:none';document.body.appendChild(v);v.src=url;await new Promise((res,rej)=>{v.onloadedmetadata=()=>res();v.onerror=()=>rej(new Error('O Safari não conseguiu decodificar este arquivo. Tente MP4/H.264.'))});const dur=Number(v.duration);if(!isFinite(dur)||dur<=0)throw new Error('Duração inválida.');state.current.duration=dur;
+const samples=await streamSamples(v,dur,step,sens,started);
 const boundaries=[0];for(let i=1;i<samples.length;i++){if(samples[i].d>=sens)boundaries.push(samples[i].t)}boundaries.push(dur);const seg=[];for(let i=0;i<boundaries.length-1;i++){const a=boundaries[i],b=boundaries[i+1];if(b-a<Math.max(2,step*.55))continue;seg.push({id:seg.length+1,start:a,end:b,mid:(a+b)/2})}if(!seg.length)seg.push({id:1,start:0,end:dur,mid:dur/2});
 setAnalysis('Gerando cenas','Criando thumbnails somente para os candidatos...');const chunks=splitScript(script,maxN);const ad=Number(state.current.audioDuration);const rows=[];const sceneByTime=(target)=>{const idx=seg.reduce((best,s,i)=>Math.abs(s.mid-target)<Math.abs(seg[best].mid-target)?i:best,0);const arr=[];for(let d=-8;d<=8;d++){const j=idx+d;if(seg[j]){const s=seg[j];const near=Math.exp(-Math.abs(s.mid-target)/Math.max(18,step*4));arr.push({s,score:near})}}arr.sort((a,b)=>b.score-a.score);const chosen=[];for(const x of arr){if(chosen.some(y=>Math.abs(y.s.mid-x.s.mid)<Math.max(3,step*.65)))continue;chosen.push(x);if(chosen.length>=topk)break}return chosen};
-for(let ci=0;ci<chunks.length;ci++){const text=chunks[ci];const n0=ad?ci/chunks.length*ad:null,n1=ad?(ci+1)/chunks.length*ad:null;const target=((ci+.5)/chunks.length)*dur;const cand=sceneByTime(target);const overlaps=ad?runtime.audioFiles.map((f,i)=>({f,i})).filter(x=>{const p=state.current.audioParts?.[x.i];return p&&p.duration!=null&&(n0<p.duration*(x.i+1)||true)}).map(x=>x.f.name):[];for(let rank=0;rank<cand.length;rank++){const s=cand[rank].s;const thumb=await makeThumb(v,s.mid);const score=Math.min(.99,.55+cand[rank].score*.42);rows.push({trecho:ci+1,candidato:rank+1,roteiro:text,narracao_inicio:n0,narracao_fim:n1,narracao_arquivos:overlaps,filme_inicio:s.start,filme_fim:s.end,frame:s.mid,score:Number(score.toFixed(3)),confianca:'GUIA',cena_id:`CENA_${String(s.id).padStart(4,'0')}`,imagem:thumb,aprovada:false,metodo:'V8 local · detecção de mudanças + alinhamento temporal'});setProgress(68+((ci+rank/topk)/chunks.length)*30);setAnalysis('Montando mapa',`Trecho ${ci+1} de ${chunks.length} · candidato ${rank+1}/${cand.length}`,estimateETA(ci+1,chunks.length,started));await nextFrame()}}
-state.current.segments=seg.map(s=>({id:s.id,start:s.start,end:s.end,mid:s.mid}));state.current.rows=rows;state.current.status='Mapa pronto';state.current.engine='V8-local-stream';state.current.sampleStep=step;state.current.analysis={samples:samples.length,detectedScenes:seg.length};persistCurrent();renderMap();setProgress(100);go('map');toast(`Mapa V8 pronto · ${seg.length} cenas detectadas`)
-}catch(e){console.error(e);setAnalysis('Análise interrompida',e.message||'Erro','');toast('O V8 parou sem apagar o projeto.')}finally{$('analyzeBtn').disabled=false;if(v){v.pause();v.removeAttribute('src');try{v.load()}catch{}}if(url)URL.revokeObjectURL(url)}}
-
+for(let ci=0;ci<chunks.length;ci++){const text=chunks[ci];const n0=ad?ci/chunks.length*ad:null,n1=ad?(ci+1)/chunks.length*ad:null;const target=((ci+.5)/chunks.length)*dur;const cand=sceneByTime(target);const overlaps=ad?runtime.audioFiles.map((f,i)=>({f,i})).filter(x=>{const p=state.current.audioParts?.[x.i];return p&&p.duration!=null}).map(x=>x.f.name):[];for(let rank=0;rank<cand.length;rank++){const s=cand[rank].s;let thumb='';try{thumb=await makeThumb(v,s.mid)}catch(e){console.warn('thumb',e)}const score=Math.min(.99,.55+cand[rank].score*.42);rows.push({trecho:ci+1,candidato:rank+1,roteiro:text,narracao_inicio:n0,narracao_fim:n1,narracao_arquivos:overlaps,filme_inicio:s.start,filme_fim:s.end,frame:s.mid,score:Number(score.toFixed(3)),confianca:'GUIA',cena_id:`CENA_${String(s.id).padStart(4,'0')}`,imagem:thumb,aprovada:false,metodo:'V9 local · varredura sequencial + detecção de mudanças'});setProgress(68+((ci+rank/topk)/chunks.length)*30);setAnalysis('Montando mapa',`Trecho ${ci+1} de ${chunks.length} · candidato ${rank+1}/${cand.length}`,estimateETA(ci+1,chunks.length,started));await nextFrame()}}state.current.segments=seg.map(s=>({id:s.id,start:s.start,end:s.end,mid:s.mid}));state.current.rows=rows;state.current.status='Mapa pronto';state.current.engine='V9-local-sequential';state.current.sampleStep=step;state.current.analysis={samples:samples.length,detectedScenes:seg.length,mode:'sequential'};persistCurrent();renderMap();setProgress(100);go('map');toast(`Mapa V9 pronto · ${seg.length} cenas detectadas`)
+}catch(e){console.error(e);setAnalysis('Análise interrompida',e.message||'Erro','');toast('O V9 parou sem apagar o projeto.')}finally{$('analyzeBtn').disabled=false;if(v){v.pause();v.removeAttribute('src');try{v.load()}catch{};v.remove()}if(url)URL.revokeObjectURL(url)}}
 function renderMap(){const p=state.current;if(!p)return;$('mapTitle').textContent=p.name||'Projeto';const rows=p.rows||[];const groups=new Map();rows.forEach(r=>{if(!groups.has(r.trecho))groups.set(r.trecho,[]);groups.get(r.trecho).push(r)});$('statChunks').textContent=groups.size;$('statScenes').textContent=rows.length;$('statApproved').textContent=rows.filter(r=>r.aprovada).length;const box=$('mapList');box.innerHTML='';for(const [n,arr] of groups){const sec=document.createElement('div');sec.className='segment';sec.innerHTML=`<div class="segmentTop"><div class="segmentTitle">TRECHO ${pad(n)}</div><div class="segmentTitle">${arr.length} candidatos</div></div><div class="segmentText">${esc(arr[0].roteiro)}</div><div class="candidateGrid"></div>`;const grid=sec.querySelector('.candidateGrid');arr.forEach((r,i)=>{const c=document.createElement('div');c.className='candidate'+(r.aprovada?' approved':'');c.innerHTML=`<img src="${r.imagem}" loading="lazy"><div class="candidateBody"><div class="rank">CANDIDATO ${i+1} · ${esc(r.cena_id)}</div><div class="confidence">${r.confianca} · ${r.score}${r.aprovada?'<span class="approvedMark">✓ APROVADA</span>':''}</div><div class="time">Narração: <b>${r.narracao_inicio!=null?tc(r.narracao_inicio):'--:--'} → ${r.narracao_fim!=null?tc(r.narracao_fim):'--:--'}</b><br>Filme: <b>${tc(r.filme_inicio)} → ${tc(r.filme_fim)}</b><br>Frame: ${tc(r.frame)}</div><button class="smallBtn">${r.aprovada?'Desaprovar':'✓ Usar esta cena'}</button></div>`;c.querySelector('button').onclick=()=>{r.aprovada=!r.aprovada;persistCurrent();renderMap()};grid.appendChild(c)});box.appendChild(sec)}}
 function approveBest(){const groups=new Map();state.current.rows.forEach(r=>{if(!groups.has(r.trecho))groups.set(r.trecho,[]);groups.get(r.trecho).push(r)});groups.forEach(a=>{a.forEach(r=>r.aprovada=false);const best=a.slice().sort((x,y)=>y.score-x.score)[0];if(best)best.aprovada=true});persistCurrent();renderMap();toast('Melhores guias aprovados')}
 function clearApproved(){state.current.rows.forEach(r=>r.aprovada=false);persistCurrent();renderMap();toast('Aprovações limpas')}
 function download(name,text,type){const u=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
-function exportJson(){download(`${state.current.name||'projeto'}_mapa_v8.json`,JSON.stringify(state.current,null,2),'application/json')}
-function exportCsv(){const h='trecho,candidato,cena_id,narracao_inicio,narracao_fim,filme_inicio,filme_fim,frame,score,confianca,aprovada,metodo,roteiro\n';const r=state.current.rows.map(x=>[x.trecho,x.candidato,x.cena_id,x.narracao_inicio??'',x.narracao_fim??'',x.filme_inicio,x.filme_fim,x.frame,x.score,x.confianca,x.aprovada?'SIM':'NAO',x.metodo,`"${String(x.roteiro).replace(/"/g,'""')}"`].join(','));download(`${state.current.name||'projeto'}_mapa_v8.csv`,h+r.join('\n'),'text/csv')}
-function exportPlan(){const rows=state.current.rows.filter(r=>r.aprovada).sort((a,b)=>a.trecho-b.trecho);let out=`AUTO RECAP STUDIO V8 — PLANO CAPCUT\nProjeto: ${state.current.name}\nMotor: V8 local\n\n`;rows.forEach((r,i)=>{out+=`CENA ${String(i+1).padStart(3,'0')}\nRoteiro: ${r.roteiro}\nNarração: ${r.narracao_inicio!=null?tc(r.narracao_inicio):'--:--'} -> ${r.narracao_fim!=null?tc(r.narracao_fim):'--:--'}\nFilme: ${tc(r.filme_inicio)} -> ${tc(r.filme_fim)}\nFrame: ${tc(r.frame)}\nMétodo: ${r.metodo}\n\n`});if(!rows.length)out+='Nenhuma cena aprovada ainda.\n';download(`${state.current.name||'projeto'}_plano_capcut_v8.txt`,out,'text/plain')}
+function exportJson(){download(`${state.current.name||'projeto'}_mapa_v9.json`,JSON.stringify(state.current,null,2),'application/json')}
+function exportCsv(){const h='trecho,candidato,cena_id,narracao_inicio,narracao_fim,filme_inicio,filme_fim,frame,score,confianca,aprovada,metodo,roteiro\n';const r=state.current.rows.map(x=>[x.trecho,x.candidato,x.cena_id,x.narracao_inicio??'',x.narracao_fim??'',x.filme_inicio,x.filme_fim,x.frame,x.score,x.confianca,x.aprovada?'SIM':'NAO',x.metodo,`"${String(x.roteiro).replace(/"/g,'""')}"`].join(','));download(`${state.current.name||'projeto'}_mapa_v9.csv`,h+r.join('\n'),'text/csv')}
+function exportPlan(){const rows=state.current.rows.filter(r=>r.aprovada).sort((a,b)=>a.trecho-b.trecho);let out=`AUTO RECAP STUDIO V9 — PLANO CAPCUT\nProjeto: ${state.current.name}\nMotor: V9 local sequencial\n\n`;rows.forEach((r,i)=>{out+=`CENA ${String(i+1).padStart(3,'0')}\nRoteiro: ${r.roteiro}\nNarração: ${r.narracao_inicio!=null?tc(r.narracao_inicio):'--:--'} -> ${r.narracao_fim!=null?tc(r.narracao_fim):'--:--'}\nFilme: ${tc(r.filme_inicio)} -> ${tc(r.filme_fim)}\nFrame: ${tc(r.frame)}\nMétodo: ${r.metodo}\n\n`});if(!rows.length)out+='Nenhuma cena aprovada ainda.\n';download(`${state.current.name||'projeto'}_plano_capcut_v9.txt`,out,'text/plain')}
 function showExport(){go('export')}
 function wire(){
 $('startBtn').onclick=newProject;$('newProject').onclick=newProject;$('saveProject').onclick=saveCurrent;$('analyzeBtn').onclick=analyze;$('scriptInput').addEventListener('input',updateScriptInfo);

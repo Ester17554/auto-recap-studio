@@ -15,7 +15,7 @@ function setProgress(v){$('progressBar').style.width=`${Math.max(0,Math.min(100,
 function nextFrame(){return new Promise(r=>requestAnimationFrame(()=>r()))}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 
-function newProject(){state.current={id:crypto.randomUUID(),name:'',created:Date.now(),duration:0,script:'',audioDuration:null,audioParts:[],rows:[],segments:[],status:'Novo',engine:'V10-local-chunked'};runtime.movie=null;runtime.audioFiles=[];runtime.libraryFiles=[];runtime.thumbCache.clear();resetForm();go('project')}
+function newProject(){state.current={id:crypto.randomUUID(),name:'',created:Date.now(),duration:0,script:'',audioDuration:null,audioParts:[],rows:[],segments:[],status:'Novo',engine:'V11-local-reused-decoder'};runtime.movie=null;runtime.audioFiles=[];runtime.libraryFiles=[];runtime.thumbCache.clear();resetForm();go('project')}
 function resetForm(){$('projectName').value='';$('projectTitle').textContent='Novo projeto';$('scriptInput').value='';$('movieFile').value='';$('moviePhotoFile').value='';$('audioFile').value='';$('mediaLibrary').value='';$('movieInfo').textContent='Nenhum filme selecionado.';$('movieDiag').classList.add('hidden');$('audioInfo').textContent='Nenhuma narração selecionada.';$('audioList').innerHTML='';$('libraryList').innerHTML='';$('libraryInfo').textContent='Opcional. O filme principal continua sendo a fonte.';$('moviePreview').classList.add('hidden');$('moviePreviewVideo').removeAttribute('src');$('analysisBox').classList.add('hidden');setProgress(0);updateScriptInfo()}
 function openProject(p){state.current=JSON.parse(JSON.stringify(p));runtime.movie=null;runtime.audioFiles=[];runtime.libraryFiles=[];runtime.thumbCache.clear();$('projectName').value=p.name||'Projeto';$('projectTitle').textContent=p.name||'Projeto';$('scriptInput').value=p.script||'';$('movieFile').value='';$('moviePhotoFile').value='';$('audioFile').value='';$('mediaLibrary').value='';$('movieInfo').textContent=p.duration?`Mapa salvo · filme ${tc(p.duration)}`:'Selecione o filme novamente para analisar.';$('audioInfo').textContent=p.audioDuration?`Narração virtual · ${tc(p.audioDuration)} · ${p.audioParts?.length||0} arquivo(s)`:'Nenhuma narração salva.';$('audioList').innerHTML='';updateScriptInfo();if(p.rows?.length){renderMap();go('map')}else go('project')}
 function saveCurrent(){if(!state.current)return;state.current.name=($('projectName').value||'Projeto sem nome').trim();state.current.script=$('scriptInput').value;state.current.status=state.current.rows?.length?'Mapa pronto':'Em preparação';persistCurrent();renderProjects();$('projectTitle').textContent=state.current.name;toast('Projeto salvo')}
@@ -54,9 +54,9 @@ async function waitForVideoEvent(v, event, timeout=12000){
 }
 function createLocalVideo(url){
   const v=document.createElement('video');
-  v.preload='auto';v.muted=true;v.playsInline=true;v.setAttribute('playsinline','');
+  v.preload='metadata';v.muted=true;v.playsInline=true;v.setAttribute('playsinline','');
   v.setAttribute('webkit-playsinline','');
-  v.style.cssText='position:fixed;width:8px;height:8px;left:0;top:0;opacity:.01;pointer-events:none;z-index:-1';
+  v.style.cssText='position:fixed;width:16px;height:9px;left:0;top:0;opacity:.02;pointer-events:none;z-index:-1';
   v.src=url;document.body.appendChild(v);return v;
 }
 function destroyLocalVideo(v,url){
@@ -66,57 +66,85 @@ function destroyLocalVideo(v,url){
   try{v.remove();}catch{}
   if(url)try{URL.revokeObjectURL(url)}catch{}
 }
-async function scanChunk(file, chunkStart, chunkEnd, step, sens, sampleOffset, totalSamples, started){
+async function prepareMovieVideo(file){
+  // V11: prefer the preview decoder already created when the user selected
+  // the movie. This avoids asking iOS/Safari to parse the 4.9 GB H.265 file
+  // a second time just to read metadata.
+  const preview=$('moviePreviewVideo');
+  if(preview && preview.dataset.url && Number(preview.duration)>0 && preview.readyState>=1){
+    return {v:preview,url:null,owned:false};
+  }
   const url=URL.createObjectURL(file);
   const v=createLocalVideo(url);
-  const samples=[];
   try{
-    await waitForVideoEvent(v,'loadedmetadata',15000);
-    const actualEnd=Math.min(chunkEnd, Number(v.duration)||chunkEnd);
-    const start=Math.max(0,chunkStart);
-    try{v.currentTime=start}catch{}
-    try{await waitForVideoEvent(v,'canplay',12000)}catch{}
-    const firstTarget=start;
-    let nextTarget=firstTarget;
-    let lastMedia=-1;
-    let lastWall=performance.now();
-    let stallCount=0;
-    const rate=8;
-    v.playbackRate=rate;
-    const playPromise=v.play();
-    if(playPromise?.catch)await playPromise.catch(()=>{});
-    while(nextTarget<=actualEnd+0.05){
-      const deadline=performance.now()+Math.max(22000,step*2600);
-      let got=false;
-      while(performance.now()<deadline){
-        const cur=Number(v.currentTime)||0;
-        if(cur+0.18>=nextTarget){
-          const sig=signatureFromVideo(v);
-          samples.push({t:Math.min(cur,actualEnd),sig,d:0});
-          got=true;
-          nextTarget+=step;
-          const idx=sampleOffset+samples.length;
-          setAnalysis('Varredura em blocos',`Amostra ${idx} de ${totalSamples} · ${tc(cur)} · bloco ${tc(start)}–${tc(actualEnd)}`,estimateETA(idx,totalSamples,started));
-          setProgress(Math.min(65,(idx/Math.max(1,totalSamples))*65));
-          break;
-        }
-        if(cur<=lastMedia+0.01)stallCount++;else stallCount=0;
-        lastMedia=cur;
-        if(stallCount>80)break;
-        await new Promise(r=>requestAnimationFrame(r));
+    if(isFinite(v.duration) && v.duration>0)return {v,url,owned:true};
+    await waitForVideoEvent(v,'loadedmetadata',30000);
+    if(!isFinite(v.duration)||v.duration<=0)throw new Error('Duração inválida.');
+    return {v,url,owned:true};
+  }catch(e){destroyLocalVideo(v,url);throw e}
+}
+async function seekAndPlay(v,t,rate=4){
+  try{v.pause()}catch{}
+  try{v.currentTime=Math.max(0,Math.min(t,Math.max(0,(v.duration||t)-0.05)))}catch{}
+  // Some iOS versions fire seeked; others can take a while before canplay.
+  await new Promise((resolve,reject)=>{
+    let done=false;
+    const finish=(ok,err)=>{if(done)return;done=true;clearTimeout(timer);v.removeEventListener('canplay',okFn);v.removeEventListener('loadeddata',dataFn);v.removeEventListener('seeked',seekFn);ok?resolve():reject(err||new Error('Não foi possível preparar o bloco.'))};
+    const okFn=()=>finish(true); const dataFn=()=>finish(true); const seekFn=()=>finish(true);
+    const timer=setTimeout(()=>finish(false,new Error(`Tempo esgotado ao preparar o bloco em ${tc(t)}.`)),15000);
+    v.addEventListener('canplay',okFn,{once:true});v.addEventListener('loadeddata',dataFn,{once:true});v.addEventListener('seeked',seekFn,{once:true});
+  }).catch(()=>{});
+  v.playbackRate=rate;
+  try{const p=v.play();if(p?.catch)await p.catch(()=>{})}catch{}
+}
+async function scanChunkWithVideo(v, chunkStart, chunkEnd, step, sens, sampleOffset, totalSamples, started){
+  const samples=[];
+  const actualEnd=Math.min(chunkEnd, Number(v.duration)||chunkEnd);
+  const start=Math.max(0,chunkStart);
+  await seekAndPlay(v,start,4);
+  let nextTarget=start;
+  let lastMedia=Number(v.currentTime)||start;
+  let lastWall=performance.now();
+  let stallSince=performance.now();
+  while(nextTarget<=actualEnd+0.05){
+    const deadline=performance.now()+Math.max(30000,step*3200);
+    let got=false;
+    while(performance.now()<deadline){
+      const cur=Number(v.currentTime)||0;
+      if(cur+0.25>=nextTarget){
+        const sig=signatureFromVideo(v);
+        if(sig){samples.push({t:Math.min(cur,actualEnd),sig,d:0});}
+        got=true;nextTarget+=step;
+        const idx=sampleOffset+samples.length;
+        setAnalysis('Varredura em blocos',`Amostra ${idx} de ${totalSamples} · ${tc(cur)} · bloco ${tc(start)}–${tc(actualEnd)}`,estimateETA(idx,totalSamples,started));
+        setProgress(Math.min(65,(idx/Math.max(1,totalSamples))*65));
+        break;
       }
-      if(!got){
-        // One lightweight recovery attempt inside the same short-lived video.
-        try{v.pause();v.load();await waitForVideoEvent(v,'loadedmetadata',8000);v.currentTime=Math.max(start,nextTarget);await waitForVideoEvent(v,'canplay',8000);v.playbackRate=4;await v.play()}catch{}
-        if(Number(v.currentTime)+0.2<nextTarget)break;
+      if(cur>lastMedia+0.03){stallSince=performance.now();lastMedia=cur}
+      else if(performance.now()-stallSince>7000){break}
+      await new Promise(r=>requestAnimationFrame(r));
+    }
+    if(!got){
+      // Recover only this block. Do not destroy the entire decoder.
+      try{await seekAndPlay(v,Math.max(start,nextTarget),2)}catch{}
+      const cur=Number(v.currentTime)||0;
+      if(cur+0.25<nextTarget){
+        // One final attempt with a slightly later position; then end this block
+        // so the saved checkpoint can move forward rather than hanging forever.
+        try{await seekAndPlay(v,Math.min(actualEnd-0.2,Math.max(start,nextTarget+1)),1)}catch{}
+        if((Number(v.currentTime)||0)+0.25<nextTarget)break;
       }
     }
-    // Always capture the last available point in this block if it was not sampled.
-    if(!samples.length || samples[samples.length-1].t<actualEnd-1){
-      try{v.pause();v.currentTime=Math.max(start,actualEnd-0.2);await new Promise(r=>requestAnimationFrame(r));samples.push({t:actualEnd,sig:signatureFromVideo(v),d:0})}catch{}
-    }
-    return samples;
-  }finally{destroyLocalVideo(v,url)}
+  }
+  try{v.pause()}catch{}
+  if(!samples.length || samples[samples.length-1].t<actualEnd-1){
+    try{
+      await seekAndPlay(v,Math.max(start,actualEnd-0.2),1);
+      await new Promise(r=>requestAnimationFrame(r));
+      const sig=signatureFromVideo(v);if(sig)samples.push({t:actualEnd,sig,d:0});
+    }catch{}
+  }
+  return samples;
 }
 function signatureFromVideo(v){
   const c=document.createElement('canvas');c.width=32;c.height=18;
@@ -149,11 +177,13 @@ async function analyze(){
   $('analyzeBtn').disabled=true;setProgress(0);
   const started=performance.now();
   try{
-    // Read metadata with a short-lived video element.
-    const metaUrl=URL.createObjectURL(movie);const mv=createLocalVideo(metaUrl);
-    await waitForVideoEvent(mv,'loadedmetadata',15000);const dur=Number(mv.duration);destroyLocalVideo(mv,metaUrl);
+    // V11: reuse the already selected movie decoder for the whole run.
+    // This avoids a second metadata parse that can fail on iOS with large H.265 files.
+    const prepared=await prepareMovieVideo(movie);
+    const mv=prepared.v, movieUrl=prepared.url, movieOwned=prepared.owned;
+    const dur=Number(state.current.duration)||Number(mv.duration);
     if(!isFinite(dur)||dur<=0)throw new Error('Duração inválida.');
-    state.current.duration=dur;state.current.sampleStep=step;state.current.engine='V10-local-chunked';
+    state.current.duration=dur;state.current.sampleStep=step;state.current.engine='V11-local-reused-decoder';
     const totalSamples=Math.ceil(dur/step)+1;
     const chunkLen=120;
     let samples=Array.isArray(state.current.partialSamples)?state.current.partialSamples:[];
@@ -170,7 +200,7 @@ async function analyze(){
         state.current.partialUntil=ce;persistCurrent();continue;
       }
       setAnalysis('Varredura em blocos',`Lendo ${tc(cs)} → ${tc(ce)} · ${samples.length}/${totalSamples} amostras`);
-      const got=await scanChunk(movie,cs,ce,step,sens,samples.length,totalSamples,started);
+      const got=await scanChunkWithVideo(mv,cs,ce,step,sens,samples.length,totalSamples,started);
       samples=samples.filter(x=>x.t<cs-0.5||x.t>ce+0.5).concat(got).sort((a,b)=>a.t-b.t);
       state.current.partialSamples=samples;
       state.current.partialUntil=ce;
@@ -192,13 +222,15 @@ async function analyze(){
       const text=chunks[ci],n0=ad?ci/chunks.length*ad:null,n1=ad?(ci+1)/chunks.length*ad:null,target=((ci+.5)/chunks.length)*dur,cand=sceneByTime(target);
       for(let rank=0;rank<cand.length;rank++){
         const s=cand[rank].s;const score=Math.min(.99,.55+cand[rank].score*.42);
-        rows.push({trecho:ci+1,candidato:rank+1,roteiro:text,narracao_inicio:n0,narracao_fim:n1,narracao_arquivos:(state.current.audioParts||[]).map(x=>x.name),filme_inicio:s.start,filme_fim:s.end,frame:s.mid,score:Number(score.toFixed(3)),confianca:'GUIA',cena_id:`CENA_${String(s.id).padStart(4,'0')}`,imagem:'',aprovada:false,metodo:'V10 local · análise em blocos de 2 min · assinaturas sequenciais'});
+        rows.push({trecho:ci+1,candidato:rank+1,roteiro:text,narracao_inicio:n0,narracao_fim:n1,narracao_arquivos:(state.current.audioParts||[]).map(x=>x.name),filme_inicio:s.start,filme_fim:s.end,frame:s.mid,score:Number(score.toFixed(3)),confianca:'GUIA',cena_id:`CENA_${String(s.id).padStart(4,'0')}`,imagem:'',aprovada:false,metodo:'V11 local · blocos de 2 min · decodificador reutilizado'});
       }
       setProgress(70+((ci+1)/chunks.length)*30);setAnalysis('Montando mapa',`Trecho ${ci+1} de ${chunks.length}`,estimateETA(ci+1,chunks.length,started));await nextFrame();
     }
-    state.current.segments=seg.map(s=>({id:s.id,start:s.start,end:s.end,mid:s.mid}));state.current.rows=rows;state.current.status='Mapa pronto';state.current.analysis={samples:samples.length,detectedScenes:seg.length,mode:'chunked-sequential',chunkSeconds:chunkLen};
+    state.current.segments=seg.map(s=>({id:s.id,start:s.start,end:s.end,mid:s.mid}));state.current.rows=rows;state.current.status='Mapa pronto';state.current.analysis={samples:samples.length,detectedScenes:seg.length,mode:'chunked-sequential-reused-decoder',chunkSeconds:chunkLen};
+    if(movieOwned)destroyLocalVideo(mv,movieUrl);
     delete state.current.partialSamples;delete state.current.partialUntil;persistCurrent();renderMap();setProgress(100);go('map');toast(`Mapa V10 pronto · ${seg.length} cenas detectadas`);
   }catch(e){
+    try{if(typeof mv!=='undefined')destroyLocalVideo(mv,movieUrl)}catch{}
     console.error(e);setAnalysis('Análise pausada',e.message||'Erro','O progresso concluído foi salvo.');toast('A análise foi pausada. Você pode continuar do ponto salvo.');
   }finally{$('analyzeBtn').disabled=false;}
 }
@@ -206,9 +238,9 @@ function renderMap(){const p=state.current;if(!p)return;$('mapTitle').textConten
 function approveBest(){const groups=new Map();state.current.rows.forEach(r=>{if(!groups.has(r.trecho))groups.set(r.trecho,[]);groups.get(r.trecho).push(r)});groups.forEach(a=>{a.forEach(r=>r.aprovada=false);const best=a.slice().sort((x,y)=>y.score-x.score)[0];if(best)best.aprovada=true});persistCurrent();renderMap();toast('Melhores guias aprovados')}
 function clearApproved(){state.current.rows.forEach(r=>r.aprovada=false);persistCurrent();renderMap();toast('Aprovações limpas')}
 function download(name,text,type){const u=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
-function exportJson(){download(`${state.current.name||'projeto'}_mapa_v9.json`,JSON.stringify(state.current,null,2),'application/json')}
-function exportCsv(){const h='trecho,candidato,cena_id,narracao_inicio,narracao_fim,filme_inicio,filme_fim,frame,score,confianca,aprovada,metodo,roteiro\n';const r=state.current.rows.map(x=>[x.trecho,x.candidato,x.cena_id,x.narracao_inicio??'',x.narracao_fim??'',x.filme_inicio,x.filme_fim,x.frame,x.score,x.confianca,x.aprovada?'SIM':'NAO',x.metodo,`"${String(x.roteiro).replace(/"/g,'""')}"`].join(','));download(`${state.current.name||'projeto'}_mapa_v10.csv`,h+r.join('\n'),'text/csv')}
-function exportPlan(){const rows=state.current.rows.filter(r=>r.aprovada).sort((a,b)=>a.trecho-b.trecho);let out=`AUTO RECAP STUDIO V10 — PLANO CAPCUT\nProjeto: ${state.current.name}\nMotor: V10 local em blocos\n\n`;rows.forEach((r,i)=>{out+=`CENA ${String(i+1).padStart(3,'0')}\nRoteiro: ${r.roteiro}\nNarração: ${r.narracao_inicio!=null?tc(r.narracao_inicio):'--:--'} -> ${r.narracao_fim!=null?tc(r.narracao_fim):'--:--'}\nFilme: ${tc(r.filme_inicio)} -> ${tc(r.filme_fim)}\nFrame: ${tc(r.frame)}\nMétodo: ${r.metodo}\n\n`});if(!rows.length)out+='Nenhuma cena aprovada ainda.\n';download(`${state.current.name||'projeto'}_plano_capcut_v10.txt`,out,'text/plain')}
+function exportJson(){download(`${state.current.name||'projeto'}_mapa_v11.json`,JSON.stringify(state.current,null,2),'application/json')}
+function exportCsv(){const h='trecho,candidato,cena_id,narracao_inicio,narracao_fim,filme_inicio,filme_fim,frame,score,confianca,aprovada,metodo,roteiro\n';const r=state.current.rows.map(x=>[x.trecho,x.candidato,x.cena_id,x.narracao_inicio??'',x.narracao_fim??'',x.filme_inicio,x.filme_fim,x.frame,x.score,x.confianca,x.aprovada?'SIM':'NAO',x.metodo,`"${String(x.roteiro).replace(/"/g,'""')}"`].join(','));download(`${state.current.name||'projeto'}_mapa_v11.csv`,h+r.join('\n'),'text/csv')}
+function exportPlan(){const rows=state.current.rows.filter(r=>r.aprovada).sort((a,b)=>a.trecho-b.trecho);let out=`AUTO RECAP STUDIO V10 — PLANO CAPCUT\nProjeto: ${state.current.name}\nMotor: V10 local em blocos\n\n`;rows.forEach((r,i)=>{out+=`CENA ${String(i+1).padStart(3,'0')}\nRoteiro: ${r.roteiro}\nNarração: ${r.narracao_inicio!=null?tc(r.narracao_inicio):'--:--'} -> ${r.narracao_fim!=null?tc(r.narracao_fim):'--:--'}\nFilme: ${tc(r.filme_inicio)} -> ${tc(r.filme_fim)}\nFrame: ${tc(r.frame)}\nMétodo: ${r.metodo}\n\n`});if(!rows.length)out+='Nenhuma cena aprovada ainda.\n';download(`${state.current.name||'projeto'}_plano_capcut_v11.txt`,out,'text/plain')}
 function showExport(){go('export')}
 function wire(){
 $('startBtn').onclick=newProject;$('newProject').onclick=newProject;$('saveProject').onclick=saveCurrent;$('analyzeBtn').onclick=analyze;$('scriptInput').addEventListener('input',updateScriptInfo);
